@@ -1,0 +1,17 @@
+services:
+
+  netbox-to-librenms:
+    image: jimdavis66/netbox-to-librenms:latest
+    container_name: netbox-to-librenms
+    restart: always
+    network_mode: host
+    env_file: .env
+
+# Local Dev Environment
+  # netbox-to-librenms:
+  #   build: .
+  #   container_name: netbox-to-librenms
+  #   volumes:
+  #     - ./app:/app
+  #   env_file: .env
+  
