@@ -1,7 +1,7 @@
 services:
 
   netbox-to-librenms:
-    image: jimdavis66/netbox-to-librenms:latest
+    image: ghcr.io/kambala-school/netbox-to-librenms:latest
     container_name: netbox-to-librenms
     restart: always
     network_mode: host
