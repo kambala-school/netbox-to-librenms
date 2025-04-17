@@ -68,7 +68,7 @@ def filter_netbox_devices(netbox_devices):
         #  - id 6 Projector
         device_role_ids = [3, 4, 6, 11]
         for role in device_role_ids:
-            if device["device_role"]["id"] == role:
+            if device["role"]["id"] == role:
                 
                 # Ignore devices with no IP address
                 if device.get('primary_ip') is not None:
