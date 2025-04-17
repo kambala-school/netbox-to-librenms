@@ -1,14 +1,14 @@
 name: Docker image build
 
 on:
-  schedule:
-    - cron: '15 8 * * *'
   push:
     branches: [ "main" ]
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ "main" ]
+  # Enable manual trigger
+  workflow_dispatch:
 
 env:
   # Use docker.io for Docker Hub if empty
