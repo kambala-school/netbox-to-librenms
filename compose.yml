@@ -3,8 +3,7 @@ services:
   netbox-to-librenms:
     image: ghcr.io/kambala-school/netbox-to-librenms:latest
     container_name: netbox-to-librenms
-    restart: always
-    network_mode: host
+    restart: unless-stopped
     env_file: .env
 
 # Local Dev Environment
