@@ -23,8 +23,31 @@ librenms_headers = {
     "Content-Type": "application/json"
 }
 domain_name = os.getenv("DOMAIN_NAME")
+DEVICE_ROLE_IDS = [3, 4, 6, 11]
 
 # Functions
+def netbox_device_in_sync_scope(device):
+    """
+    Return True if a NetBox device should be managed by this sync.
+    """
+    if device["role"]["id"] not in DEVICE_ROLE_IDS:
+        return False
+    return device.get('primary_ip') is not None
+
+def get_netbox_device_by_id(netbox_devices, netbox_id):
+    """
+    Find a NetBox device by ID.
+    """
+    for device in netbox_devices:
+        if device['id'] == int(netbox_id):
+            return device
+    return None
+
+def is_librenms_device_active(device):
+    """
+    Return True if a LibreNMS device is not disabled or ignored.
+    """
+    return device.get('disabled', 0) != 1 and device.get('ignore', 0) != 1
 def get_netbox_devices(netbox_session):
     """
     Get devices from NetBox
@@ -60,31 +83,19 @@ def filter_netbox_devices(netbox_devices):
     """
     filtered_devices = []
     for device in netbox_devices:
-        # Ignore devices that aren't part of the specified roles
-        #  - move this variable to a env or something that's not hard coded
-        #  - id 3 AV Control Button Device
-        #  - id 4 AV Control Media Device
-        #  - id 11 TV
-        #  - id 6 Projector
-        device_role_ids = [3, 4, 6, 11]
-        for role in device_role_ids:
-            if device["role"]["id"] == role:
-                
-                # Ignore devices with no IP address
-                if device.get('primary_ip') is not None:
-                    # Remove the netmask that comes from the NetBox IP
-                    device["primary_ip"]["address"] = device["primary_ip"]["address"].split('/',1)[0]
-
-                    filtered_devices.append(device)
+        if netbox_device_in_sync_scope(device):
+            # Remove the netmask that comes from the NetBox IP
+            device["primary_ip"]["address"] = device["primary_ip"]["address"].split('/',1)[0]
+            filtered_devices.append(device)
 
     return filtered_devices
 
 def get_librenms_devices(librenms_session):
     """
-    Get devices from LibreNMS
+    Get devices from LibreNMS and annotate app-synced ones with their NetBox ID.
     """
     try:
-        url = librenms_url + '/devices/'
+        url = librenms_url + '/devices?type=all'
         response = librenms_session.get(url).json()
 
         # Get the first page of devices
@@ -93,7 +104,7 @@ def get_librenms_devices(librenms_session):
         for device in devices:
             # Get netbox_id from LibreNMS Components
             # '/devices/:id/components?type=netbox_id'
-            component_url = url + str(device['device_id']) + '/components?type=netbox_id'
+            component_url = librenms_url + '/devices/' + str(device['device_id']) + '/components?type=netbox_id'
             response = librenms_session.get(component_url).json()
 
             # Check if the device has any components
@@ -109,6 +120,7 @@ def get_librenms_devices(librenms_session):
         return devices
     except Exception:
         logger.error('Failed to get devices from LibreNMS')
+        return []
 
 def compare_device_details(device,netbox_devices,librenms_session):
     """
@@ -223,6 +235,54 @@ def update_device_details(device, netbox_device, librenms_session):
     except Exception as err:
         logger.error(f"Failed to update LibreNMS device: {err}")
 
+def delete_librenms_device(device, librenms_session):
+    """
+    Delete a LibreNMS device that was previously synced by this app.
+    """
+    try:
+        logger.info("Deleting {} from LibreNMS (NetBox ID: {})", device['hostname'], device['netbox_id'])
+        url = librenms_url + '/devices/' + str(device['device_id'])
+        response = librenms_session.delete(url).json()
+        if response.get('status') == 'ok':
+            logger.info("Removed {} from LibreNMS", device['hostname'])
+        else:
+            logger.error("Failed to delete {} from LibreNMS: {}", device['hostname'], response)
+    except Exception as err:
+        logger.error(f"Failed to delete LibreNMS device: {err}")
+
+def cleanup_synced_librenms_device(librenms_device, all_netbox_devices, librenms_session):
+    """
+    Remove or disable LibreNMS devices previously synced by this app when NetBox no longer wants them monitored.
+    """
+    netbox_device = get_netbox_device_by_id(all_netbox_devices, librenms_device['netbox_id'])
+
+    if netbox_device is None:
+        logger.info(
+            "NetBox device {} no longer exists - removing {} from LibreNMS",
+            librenms_device['netbox_id'],
+            librenms_device['hostname'],
+        )
+        delete_librenms_device(librenms_device, librenms_session)
+        return
+
+    if not netbox_device_in_sync_scope(netbox_device):
+        logger.info(
+            "NetBox device {} no longer in sync scope - removing {} from LibreNMS",
+            netbox_device['name'],
+            librenms_device['hostname'],
+        )
+        delete_librenms_device(librenms_device, librenms_session)
+        return
+
+    if netbox_device['status']['value'] != 'active' and is_librenms_device_active(librenms_device):
+        logger.info(
+            "NetBox device {} is {} - disabling {} in LibreNMS",
+            netbox_device['name'],
+            netbox_device['status']['value'],
+            librenms_device['hostname'],
+        )
+        update_device_details(librenms_device, netbox_device, librenms_session)
+
 def create_librenms_device(device, librenms_session):
     """
     Create a LibreNMS device from the NetBox source of truth.
@@ -286,17 +346,22 @@ while True:
         #Create NetBox and LibreNMS sessions and get lists of devices
         netbox_session = requests.Session()
         netbox_session.headers = netbox_headers
-        netbox_devices = get_netbox_devices(netbox_session)
-        netbox_devices = filter_netbox_devices(netbox_devices)
+        all_netbox_devices = get_netbox_devices(netbox_session)
+        netbox_devices = filter_netbox_devices(all_netbox_devices)
 
         librenms_session = requests.Session()
         librenms_session.headers = librenms_headers
         librenms_devices = get_librenms_devices(librenms_session)
 
+        logger.info("Cleaning up previously synced LibreNMS devices no longer active in NetBox")
+        for device in librenms_devices:
+            if device.get('netbox_id') is not None:
+                cleanup_synced_librenms_device(device, all_netbox_devices, librenms_session)
+
         logger.info("Comparing previously synced devices against NetBox source of truth")
         for device in librenms_devices:
             # Check if the LibreNMS device has a netbox_id component (previously synced)
-            if device.get('netbox_id') is not None:
+            if device.get('netbox_id') is not None and is_librenms_device_active(device):
                 # Compare LibreNMS device details and check if any updates from NetBox are required
                 compare_device_details(device,netbox_devices,librenms_session)
             else:
@@ -313,7 +378,6 @@ while True:
                 if librenms_device.get('netbox_id') is not None:
                     if int(librenms_device.get('netbox_id')) == device['id']:
                         create_device = False
-                        # How to delete or disable a device in LibreNMS if it is no longer active in NetBox?
                         break
             if create_device:
                 create_librenms_device(device,librenms_session)  
