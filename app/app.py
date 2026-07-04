@@ -51,8 +51,8 @@ def get_netbox_devices(netbox_session):
         # if (response.status_code != 200):
 
         return devices
-    except:
-        logger.error(f'Failed to get devices from Netbox')
+    except Exception:
+        logger.error('Failed to get devices from Netbox')
 
 def filter_netbox_devices(netbox_devices):
     """
@@ -107,8 +107,8 @@ def get_librenms_devices(librenms_session):
         # Do more error checking on original HTTP GET
 
         return devices
-    except:
-        logger.error(f'Failed to get devices from LibreNMS')
+    except Exception:
+        logger.error('Failed to get devices from LibreNMS')
 
 def compare_device_details(device,netbox_devices,librenms_session):
     """
@@ -162,7 +162,7 @@ def compare_device_details(device,netbox_devices,librenms_session):
             # else:
             #     logger.error("LibreNMS device not found in NetBox devices")
 
-    except:
+    except Exception:
         logger.error("Failed to compare LibreNMS device with NetBox")
 
 def update_device_details(device, netbox_device, librenms_session):
