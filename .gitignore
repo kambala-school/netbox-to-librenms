@@ -1,5 +1,5 @@
-# Environment Variables
 .env
 .venv
 __pycache__
 .DS_Store
+.ruff_cache
